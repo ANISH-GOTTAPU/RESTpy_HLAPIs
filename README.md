@@ -11,6 +11,8 @@ tgnObj = Ixia('10.39.71.172', clearConfig=True)
 
 tgnObj.connect_to_session(sessionId=1)  # To connect the Session.
 
+For more test cases please check the test file.
+
 # Supported Server Versions
 Linux IxNetwork API Server
 
