@@ -2,7 +2,7 @@
 pip install netaddr
 
 # Import the packages
-*from ixia_restpy_apis import Ixia*
+*from ixia import Ixia*
 
 # Run script
 Pass API Server IP and if you are going to create new config send clearConfig as True else False.
