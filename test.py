@@ -1,4 +1,4 @@
-from ixia_restpy_apis import Ixia
+from ixia import Ixia
 
 tgnObj = Ixia('10.39.71.172', clearConfig=False)
 
