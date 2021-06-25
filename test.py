@@ -1,6 +1,6 @@
 from ixia import Ixia
 
-tgnObj = Ixia('10.39.71.172', clearConfig=False)
+tgnObj = Ixia('10.39.70.7', clearConfig=False)
 
 # connect_to_session API
 tgnObj.connect_to_session(sessionId=1)
@@ -53,3 +53,17 @@ tgnObj.stop_all_traffic()
 
 # disconnect_session API
 tgnObj.disconnect_session(port_list=['Ethernet - 001','Ethernet - 002'], tgn_server_type="linux")
+
+# start_bgp API
+tgnObj.start_bgp()
+tgnObj.start_bgp(ports=['Ethernet - 001', 'Ethernet - 002'])
+tgnObj.start_bgp(ports=['/api/v1/sessions/1/ixnetwork/vport/1', '/api/v1/sessions/1/ixnetwork/vport/2'])
+
+# stop_bgp API
+tgnObj.stop_bgp()
+tgnObj.stop_bgp(ports=['Ethernet - 001', 'Ethernet - 002'])
+tgnObj.stop_bgp(ports=['/api/v1/sessions/1/ixnetwork/vport/1','/api/v1/sessions/1/ixnetwork/vport/2'])
+
+# send_arp API
+tgnObj.send_arp()
+tgnObj.send_arp(ports=['Ethernet - 001'])

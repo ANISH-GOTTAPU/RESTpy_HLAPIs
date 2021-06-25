@@ -660,6 +660,120 @@ class Ixia():
             self.session.remove()
             results = True
         return results
+
+    def _get_vport_names(self, portHandleList):
+        """
+        Return list of Vport names by using vport handles
+        :param portHandleList:
+        :return: list of vport names
+        """
+        portNames = []
+        if portHandleList:
+            for portHandle in portHandleList:
+                if '/api' in portHandle:
+                    for vportObj in self.ixnetwork.Vport.find():
+                        if vportObj.href == portHandle:
+                            portNames.append(vportObj.Name)
+                else:
+                    portNames.append(portHandle)
+            if portNames:
+                return portNames
+            else:
+                logging.error("Ports not available, please send port details")
+        else:
+            return None
         
-        
+    def send_arp(self, ports=None):
+        """
+        Send arp based on port list, In NGPF ARP is default once IPV4 stack is up, so no need to start_arp again
+
+        :param ports: list of vport names or vport handles
+        :return: True
+
+        :Example: start_arp()
+        """
+        portNames = self._get_vport_names(ports)
+        ipTypes=['Ipv4', 'Ipv6']
+        if portNames:
+            for portname in portNames:
+                vport = self.ixnetwork.Vport.find(Name='^'+portname+'$')
+                for topology in self.ixnetwork.Topology.find():
+                    if vport.href in topology.Vports:
+                        for ipType in ipTypes:
+                            try:
+                                for ipObj in eval('topology.DeviceGroup.find().Ethernet.find().'+ipType+'.find()'):
+                                    objCount = ipObj.Count
+                                    objCountList = [device for device in range(1, objCount + 1)]
+                                    if ipType == "Ipv4":
+                                        ipObj.SendArp(SessionIndices=objCountList)
+                                    else:
+                                        ipObj.SendNs(SessionIndices=objCountList)
+                            except:
+                                pass
+        else:
+            for ipType in ipTypes:
+                try:
+                    for ipObj in eval('self.ixnetwork.Topology.find().DeviceGroup.find().Ethernet.find().'+ipType+'.find()'):
+                        objCount = ipObj.Count
+                        objCountList = [device for device in range(1, objCount + 1)]
+                        if ipType == "Ipv4":
+                            ipObj.SendArp(SessionIndices=objCountList)
+                        else:
+                            ipObj.SendNs(SessionIndices=objCountList)
+                except:
+                    pass
+        return True
+
+    def start_bgp(self, ports=None):
+        """
+        Start BGP protocol.
+        :param ports: list of vport names or vport handles
+        :return: True
+        """
+        portNames = self._get_vport_names(ports)
+        ipTypes = ['v4', 'v6']
+        if portNames:
+            for portname in portNames:
+                vport = self.ixnetwork.Vport.find(Name='^' + portname + '$')
+                for topology in self.ixnetwork.Topology.find():
+                    if vport.href in topology.Vports:
+                        for ipType in ipTypes:
+                            try:
+                                eval('topology.DeviceGroup.find().Ethernet.find().Ip'+ ipType +'.find().BgpIp'+ipType+'Peer.find().Start(None)')
+                            except:
+                                pass
+        else:
+            for ipType in ipTypes:
+                try:
+                    eval('self.ixnetwork.Topology.find().DeviceGroup.find().Ethernet.find().Ip' + ipType + '.find().BgpIp' + ipType + 'Peer.find().Start(None)')
+                except:
+                    pass
+        return True
+
+    def stop_bgp(self, ports=None):
+        """
+        Stop BGP protocol.
+        :param ports: list of vport names or vport handles
+        :return: True
+        """
+        portNames = self._get_vport_names(ports)
+        ipTypes = ['v4', 'v6']
+        if portNames:
+            for portname in portNames:
+                vport = self.ixnetwork.Vport.find(Name='^' + portname + '$')
+                for topology in self.ixnetwork.Topology.find():
+                    if vport.href in topology.Vports:
+                        for ipType in ipTypes:
+                            try:
+                                eval('topology.DeviceGroup.find().Ethernet.find().Ip'+ ipType +'.find().BgpIp'+ipType+'Peer.find().Stop(None)')
+                            except:
+                                pass
+        else:
+            for ipType in ipTypes:
+                try:
+                    eval('self.ixnetwork.Topology.find().DeviceGroup.find().Ethernet.find().Ip' + ipType + '.find().BgpIp' + ipType + 'Peer.find().Stop(None)')
+                except:
+                    pass
+        return True
+
 
