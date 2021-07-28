@@ -1,6 +1,6 @@
 from ixia import Ixia
 
-tgnObj = Ixia('10.39.70.7', clearConfig=False)
+tgnObj = Ixia('127.0.0.1', clearConfig=False)
 
 # connect_to_session API
 tgnObj.connect_to_session(sessionId=1)
@@ -67,3 +67,15 @@ tgnObj.stop_bgp(ports=['/api/v1/sessions/1/ixnetwork/vport/1','/api/v1/sessions/
 # send_arp API
 tgnObj.send_arp()
 tgnObj.send_arp(ports=['Ethernet - 001'])
+
+# start_all_protocols API
+tgnObj.start_all_protocols()
+
+# stop_all_protocols API
+tgnObj.stop_all_protocols()
+
+# get_routerrange_details API
+tgnObj.get_routerrange_details('/api/v1/sessions/1/ixnetwork/vport/1','bgpv6')
+
+# get_routerange_state API
+tgnObj.get_routerange_state('/api/v1/sessions/1/ixnetwork/vport/1','bgpv6')

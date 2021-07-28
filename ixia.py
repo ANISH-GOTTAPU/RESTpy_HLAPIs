@@ -1,10 +1,45 @@
 from ixnetwork_restpy import SessionAssistant
 from ixnetwork_restpy.files import Files
 from ixnetwork_restpy.assistants.statistics.statviewassistant import StatViewAssistant
-import logging,time,re,datetime,csv
-import netaddr
-logging.basicConfig(level=logging.INFO)
+import logging,time,re,datetime,csv,functools
+import netaddr, ixNetwork_Error, inspect
+from collections import namedtuple
+# logging.basicConfig(level=logging.INFO)
 
+def debug_log_decorator(func):
+    """
+    Decorator to download debug files on Ixia exception.
+    :param None
+    :return: None
+    """
+    @functools.wraps(func)
+    def wrapper_decorator(*args, **kwargs):
+        try:
+            value = func(*args, **kwargs)
+            return value
+        except:
+            try:
+                args[0]._download_debug_files()
+            except:
+                pass
+            raise
+    return wrapper_decorator
+
+def decorator_for_class(cls):
+    """
+    Class Decorator to apply decorator on all the public methods of Ixia class.
+    :param None
+    :return: None
+    """
+    for name, method in inspect.getmembers(cls):
+        if (not inspect.ismethod(method) and not inspect.isfunction(method)) or inspect.isbuiltin(method):
+            continue
+        if name.startswith("_"):
+            continue
+        setattr(cls, name, debug_log_decorator(method))
+    return cls
+
+@decorator_for_class
 class Ixia():
     def __init__(self,apiServerIp, clearConfig):
 
@@ -26,22 +61,31 @@ class Ixia():
                                                  UserName='admin', Password='admin',
                                                  LogLevel=SessionAssistant.LOGLEVEL_INFO,
                                                  ClearConfig=self.clearConfig, SessionId=sessionId)
-            self.session = session_assistant.Session
-            self.ixnetwork = session_assistant.Ixnetwork
+            if session_assistant:
+                self.session = session_assistant.Session
+                self.ixnetwork = session_assistant.Ixnetwork
+            else:
+                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
         elif sessionName:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
                                                  LogLevel=SessionAssistant.LOGLEVEL_INFO,
                                                  ClearConfig=self.clearConfig, SessionName=sessionName)
-            self.session = session_assistant.Session
-            self.ixnetwork = session_assistant.Ixnetwork
+            if session_assistant:
+                self.session = session_assistant.Session
+                self.ixnetwork = session_assistant.Ixnetwork
+            else:
+                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
         else:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
                                                  LogLevel=SessionAssistant.LOGLEVEL_INFO,
                                                  ClearConfig=self.clearConfig)
-            self.session = session_assistant.Session
-            self.ixnetwork = session_assistant.Ixnetwork
+            if session_assistant:
+                self.session = session_assistant.Session
+                self.ixnetwork = session_assistant.Ixnetwork
+            else:
+                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server {0}".format(self.apiServerIp))
 
         return True
 
@@ -64,7 +108,7 @@ class Ixia():
                 else:
                     time.sleep(1)
                 if counter == 100:
-                    logging.error('Connect Chassis: Connecting to chassis {0} failed'.format(chassisIp))
+                    raise ixNetwork_Error.IxiaConnectionError('Connect Chassis: Connecting to chassis {0} failed'.format(chassisIp))
         return True
 
     def load_config(self, config_file=None, port_tuple=None, chassis_ip=None):
@@ -124,7 +168,7 @@ class Ixia():
                 else:
                     time.sleep(1)
                 if counter == 60:
-                    logging.error('Connect Ports: Connecting to ports {0} failed'.format(port_tuple))
+                    raise ixNetwork_Error.IxiaConnectionError('Connect Ports: Connecting to ports {0} failed'.format(port_tuple))
 
     def get_list_topology_name(self):
         """
@@ -158,6 +202,44 @@ class Ixia():
                     if ip in ipv6Obj.Address.Values:
                         vportHref = self.ixnetwork.Topology.find(Name=topoName).Vports
                         return vportHref
+
+    def start_all_protocols(self):
+        """
+        Start all the configured protocols in config file
+
+        :return: True if successful else Raise Exception
+
+        :Example: start_all_protocols()
+        """
+        logging.info("Starting all Protocols")
+        self.ixnetwork.StartAllProtocols(Arg1='sync')
+        timeout = 20
+        for deviceGroupObj in self.ixnetwork.Topology.find().DeviceGroup.find():
+            for counter in range(0, timeout, 2):
+                if deviceGroupObj.Status == 'notStarted':
+                    msg = '\nDevice Group "%s" is not started' % deviceGroupObj.Name
+                    raise ixNetwork_Error.IxiaOperationException(msg)
+                if counter < timeout and deviceGroupObj.Status == 'starting':
+                    time.sleep(2)
+                    continue
+                if counter < timeout and deviceGroupObj.Status in ['started', 'mixed']:
+                    break
+                if counter == timeout and deviceGroupObj.Status not in ['started', 'mixed']:
+                    msg = '\nDevice Group failed to come up: {0}.'.format(deviceGroupObj.href)
+                    raise ixNetwork_Error.IxiaOperationException(msg)
+        return True
+
+    def stop_all_protocols(self):
+        """
+        Stop all the configured protocols in config file
+
+        :return: True if successful else Raise Exception
+
+        :Example: stop_all_protocols()
+        """
+        logging.info("Stopping all Protocols")
+        self.ixnetwork.StopAllProtocols(Arg1='sync')
+        return True
 
     def assign_port_to_ip(self, phy_intf, ip_addr):
         """
@@ -198,7 +280,8 @@ class Ixia():
                 trafficItem = self.ixnetwork.Traffic.TrafficItem.find()
                 trafficItem.Generate()
         except:
-            logging.error("Failed to Re-Generate Traffic")
+            raise ixNetwork_Error.IxiaConfigException("Failed to Re-Generate Traffic")
+
         return True
 
     def start_traffic_by_name(self, traffic_item_name):
@@ -207,17 +290,23 @@ class Ixia():
         :param traffic_item_name: Traffic stream name
         :return: True
         """
-        if self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').State == "stopped":
+        self.start_all_protocols()
+        if self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').State in ['stopped','stoppedWaitingForStats','unapplied']:
             self.ixnetwork.Traffic.Apply()
+            globals = self.ixnetwork.Globals
+            apperrors = globals.AppErrors.find()
+            for error in apperrors.Error.find():
+                if "One or more destination MACs or VPNs are invalid" in error.Description:
+                    raise ixNetwork_Error.IxiaOperationException("Failed to apply traffic as packets are not generated properly")
             self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').StartStatelessTraffic()
         timeout = 30
         for counter in range(1, timeout+1):
-            if self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').State == 'started':
+            if self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').State in ['started', 'startedWaitingForStats', 'startedWaitingForStreams']:
                 return True
             else:
                 time.sleep(1)
             if counter == 30:
-                logging.error('Failed to start Traffic Item : {0}'.format(traffic_item_name))
+                raise ixNetwork_Error.IxiaOperationException('Failed to start Traffic Item : {0}'.format(traffic_item_name))
 
     def stop_traffic_by_name(self, traffic_item_name):
         """
@@ -233,18 +322,19 @@ class Ixia():
         Start all the traffic streams
         :return: True
         """
-        if self.ixnetwork.Traffic.State == 'stopped':
+        self.start_all_protocols()
+        if self.ixnetwork.Traffic.State in ['stopped','stoppedWaitingForStats','unapplied']:
             self.regenerate_traffic()
             self.ixnetwork.Traffic.Apply()
             self.ixnetwork.Traffic.Start()
             timeout = 30
             for counter in range(1, timeout + 1):
-                if self.ixnetwork.Traffic.State == 'started':
+                if self.ixnetwork.Traffic.State in ['started', 'startedWaitingForStats', 'startedWaitingForStreams']:
                     return True
                 else:
                     time.sleep(1)
                 if counter == 30:
-                    logging.error('Failed to start Traffic Streams')
+                    raise ixNetwork_Error.IxiaOperationException('Failed to start Traffic Streams')
         else:
             return 'Traffic Streams already started'
 
@@ -540,18 +630,18 @@ class Ixia():
                         trafficName = trafficName.replace('+', '\+').replace('*', '\*')
                         self.ixnetwork.Traffic.TrafficItem.find(Name='^'+trafficName+'$').Enabled = True
                 except:
-                    logging.error("Not able to find the TrafficItem to Enable")
+                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to Enable")
             if isinstance(traffic_item_list, str):
                 try:
                     self.ixnetwork.Traffic.TrafficItem.find(Name='^'+traffic_item_list+'$').Enabled = True
                 except:
-                    logging.error("Not able to find the TrafficItem to Enable")
+                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to Enable")
         else:
             try:
                 for trafficItem in self.ixnetwork.Traffic.TrafficItem.find():
                     trafficItem.Enabled = True
             except:
-                logging.error("Failed to enable TrafficItem")
+                raise ixNetwork_Error.IxiaConfigException("Failed to enable TrafficItem")
         logging.info("Traffic Item/Items enabled Successfully")
         return True
 
@@ -573,18 +663,18 @@ class Ixia():
                         trafficName = trafficName.replace('+', '\+').replace('*', '\*')
                         self.ixnetwork.Traffic.TrafficItem.find(Name='^'+trafficName+'$').Enabled = False
                 except:
-                    logging.error("Not able to find the TrafficItem to disable")
+                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to disable")
             if isinstance(traffic_item_list, str):
                 try:
                     self.ixnetwork.Traffic.TrafficItem.find(Name='^'+traffic_item_list+'$').Enabled = False
                 except:
-                    logging.error("Not able to find the TrafficItem to disable")
+                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to disable")
         else:
             try:
                 for trafficItem in self.ixnetwork.Traffic.TrafficItem.find():
                     trafficItem.Enabled = False
             except:
-                logging.error("Failed to disable TrafficItem")
+                raise ixNetwork_Error.IxiaConfigException("Failed to disable TrafficItem")
         logging.info("Traffic Item/Items Disabled Successfully")
         return True
 
@@ -623,7 +713,7 @@ class Ixia():
                         try:
                             regexString = self.ixnetwork.Vport.find(Name=port).AssignedTo
                         except:
-                            logging.error("Port not configured or Failed to release")
+                            raise ixNetwork_Error.IxiaConfigException("Port not configured or Failed to release")
                 vport = self.ixnetwork.Vport.find(AssignedTo=regexString)
                 if vport:
                     vportNames.append(vport.Name)
@@ -632,7 +722,7 @@ class Ixia():
             for vport in self.ixnetwork.Vport.find():
                 if vport.ConnectionStatus != 'Port Released':
                     msg = 'Release Port "%s" not Successful' % (vport.Name)
-                    logging.error(msg)
+                    raise ixNetwork_Error.IxiaOperationException(msg)
         return True
 
     def disconnect_session(self, port_list=None, tgn_server_type="windows"):
@@ -679,7 +769,7 @@ class Ixia():
             if portNames:
                 return portNames
             else:
-                logging.error("Ports not available, please send port details")
+                raise ixNetwork_Error.IxiaConfigException("Ports not available, please send port details")
         else:
             return None
         
@@ -776,4 +866,166 @@ class Ixia():
                     pass
         return True
 
+    def _get_routeRanges_attr(self, protocol, ipPrefixPool, routePropertyObj, routeRange):
+        """
+        Get OSPF Route Ranges Attribute values
+        :param ipv4PrefixPool:
+        :param routePropertyObj:
+        :param routeRange:
+        :return:
+        """
+        if protocol == "ospf" or protocol == "ospfv3":
+            firstRoute = (ipPrefixPool.NetworkAddress.Values)[0]
+            stepvalue = ipPrefixPool.PrefixAddrStep
+            number_of_routes = ipPrefixPool.NumberOfAddressesAsy
+            addressFamily = ipPrefixPool.NetworkAddress.Values
+            allRoutes = ipPrefixPool.LastNetworkAddress
+            metric = routePropertyObj.Metric
+            origin = routePropertyObj.RouteOrigin
+            routerange = routeRange(addressFamily, routePropertyObj.Active, firstRoute, stepvalue, number_of_routes, metric, origin, allRoutes)
+            return routerange
+        if protocol == "bgp" or protocol == "bgpv6":
+            firstRoute = (ipPrefixPool.NetworkAddress.Values)[0]
+            stepvalue = ipPrefixPool.PrefixAddrStep
+            number_of_routes = ipPrefixPool.NumberOfAddressesAsy
+            allRoutes = ipPrefixPool.LastNetworkAddress
+            ipType = routePropertyObj.NextHopIPType
+            origin = routePropertyObj.Origin
+            originId = routePropertyObj.OriginatorId
+            fromPacking = routePropertyObj.PackingFrom
+            toPacking = routePropertyObj.PackingTo
+            routerange = routeRange(routePropertyObj.Active, ipType, firstRoute, number_of_routes, fromPacking, toPacking, stepvalue, originId, origin, allRoutes)
+            return routerange
+
+    def _get_protocol_propertyObj(self, protocol):
+        """
+        Get protocol Property Object name.
+        :param protocol:
+        :return:
+        """
+        OspfRouteRange = namedtuple(
+            "OspfRouteRange",
+            ["address_family", "enabled", "first_route", "step", "metric", "number_of_routes", "origin", "all_routes"]
+        )
+        Ospfv3RouteRange = namedtuple(
+            "Ospfv3RouteRange",
+            ["address_family", "enabled", "first_route", "step", "metric", "number_of_routes", "origin", "all_routes"]
+        )
+        BgpRouteRange = namedtuple(
+            "BgpRouteRange",
+            ["enabled", "ip_type", "first_route", "number_of_routes", "from_packing", "to_packing", "step",
+             "originator_id", "origin_protocol", "all_routes"]
+        )
+        Bgpv6RouteRange = namedtuple("Bgpv6RouteRange",
+                                     ["enabled", "ip_type", "first_route", "number_of_routes", "from_packing",
+                                      "to_packing", "step",
+                                      "originator_id", "origin_protocol", "all_routes"])
+        IsisRouteRange = namedtuple("IsisRouteRange", [])
+        LdpRouteRange = namedtuple("LdpRouteRange", [])
+        Ldpv6RouteRange = namedtuple("Ldpv6RouteRange", [])
+        if protocol.lower() == 'bgp':
+            propertyObj = 'BgpIPRoute'
+            version = 'v4'
+            routeRange = BgpRouteRange
+        elif protocol.lower() == 'bgpv6':
+            propertyObj = 'BgpV6IPRoute'
+            version = 'v6'
+            routeRange = Bgpv6RouteRange
+        elif protocol.lower() == 'ospf':
+            version = 'v4'
+            propertyObj = 'OspfRoute'
+            routeRange = OspfRouteRange
+        elif protocol.lower() == 'ospfv3':
+            propertyObj = 'Ospfv3Route'
+            version = 'v6'
+            routeRange = Ospfv3RouteRange
+        elif protocol.lower() == 'ldp':
+            propertyObj = 'LdpFEC'
+            version = 'v4'
+            routeRange = LdpRouteRange
+        elif protocol.lower() == 'ldpv6':
+            routeRange = Ldpv6RouteRange
+            version = 'v6'
+            propertyObj = 'LdpIpv6FEC'
+        elif protocol.lower() == 'isis':
+            propertyObj = 'IsisL3Route'
+            version = 'v4'
+            routeRange = IsisRouteRange
+        elif protocol.lower() == 'isisv6':
+            propertyObj = 'IsisL3Route'
+            version = 'v6'
+            routeRange = IsisRouteRange
+        else:
+            raise ixNetwork_Error.IxiaConfigException("Please send a valid protocol name")
+        return [propertyObj,version,routeRange]
+
+    def get_routerrange_details(self, port, protocol):
+        """
+        Get all routers and route ranges advertised.
+        :param vport: vport name or handle
+        :param protocol: protocol name
+        :return example: {('router1::ixiastr', '50.1.1.1'):
+            {('routerange2::ixiastr', '13.1.1.1'): namedtuple<OspfRouteRange>,
+            ('routerange1::ixiastr', '12.1.1.1'): namedtuple<OspfRouteRange>}}
+
+        """
+        portNames = self._get_vport_names([port])
+        routeProperty = self._get_protocol_propertyObj(protocol)
+        propertyObj = routeProperty[0]
+        version = routeProperty[1]
+        routeRange = routeProperty[2]
+        routeRanges = {}
+        if portNames:
+            for portname in portNames:
+                vport = self.ixnetwork.Vport.find(Name='^' + portname + '$')
+                for topology in self.ixnetwork.Topology.find():
+                    if vport.href in topology.Vports:
+                        for deviceObj in topology.DeviceGroup.find():
+                            for networkObj in deviceObj.NetworkGroup.find():
+                                try:
+                                    if eval('networkObj.Ip'+version+'PrefixPools.find().'+propertyObj+'Property.find()'):
+                                        for ipPrefixPool in eval('networkObj.Ip'+version+'PrefixPools.find()'):
+                                            firstRoute = (ipPrefixPool.NetworkAddress.Values)[0]
+                                            for routePropertyObj in eval('ipPrefixPool.'+propertyObj+'Property.find()'):
+                                                routerange= self._get_routeRanges_attr(protocol.lower(), ipPrefixPool, routePropertyObj, routeRange)
+                                                routeRanges[networkObj.Name, (deviceObj.RouterData.find().RouterId.Values)[0]] = {(routePropertyObj.Name,firstRoute):routerange}
+                                except:
+                                    pass
+        if routeRanges:
+            return routeRanges
+        else:
+            raise ixNetwork_Error.IxiaConfigException("Route ranges not available on this {0} port for the {1} protocol".format(port,protocol))
+
+    def get_routerange_state(self, vport_objref, proto_name="ospf"):
+        """
+        Get Route Range state.
+        :param vport_objref:
+        :param proto_name:
+        :return:
+        """
+        portNames = self._get_vport_names([vport_objref])
+        routeProperty = self._get_protocol_propertyObj(proto_name)
+        propertyObj = routeProperty[0]
+        version = routeProperty[1]
+        routeRangesState = []
+        if portNames:
+            for portname in portNames:
+                vport = self.ixnetwork.Vport.find(Name='^' + portname + '$')
+                for topology in self.ixnetwork.Topology.find():
+                    if vport.href in topology.Vports:
+                        for deviceObj in topology.DeviceGroup.find():
+                            for networkObj in deviceObj.NetworkGroup.find():
+                                try:
+                                    if eval('networkObj.Ip' + version + 'PrefixPools.find().' + propertyObj + 'Property.find()'):
+                                        for ipPrefixPool in eval('networkObj.Ip' + version + 'PrefixPools.find()'):
+                                            for routePropertyObj in eval('ipPrefixPool.' + propertyObj + 'Property.find()'):
+                                                state = routePropertyObj.Active
+                                                routeRangesState.append(state)
+                                except:
+                                    pass
+        if routeRangesState:
+            return routeRangesState
+        else:
+            raise ixNetwork_Error.IxiaConfigException(
+                "Route ranges not available on this {0} port for the {1} protocol".format(vport_objref, proto_name))
 
