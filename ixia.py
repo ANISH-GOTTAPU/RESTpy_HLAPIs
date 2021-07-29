@@ -2,25 +2,14 @@ from ixnetwork_restpy import SessionAssistant
 from ixnetwork_restpy.files import Files
 from ixnetwork_restpy.assistants.statistics.statviewassistant import StatViewAssistant
 import logging,time,re,datetime,csv,functools
-import netaddr, ixNetwork_Error, inspect, os, types, sys
+import netaddr, inspect
 from collections import namedtuple
 # logging.basicConfig(level=logging.INFO)
+
 class IxNetError(Exception):
     """
     Default IxNet error
     """
-
-# default frame template (see log_exceptions below)
-LOG_FRAME_TPL = '  File "%s", line %i, in %s\n    %s\n'
-
-def log_to_str(value):
-    if isinstance(value, types.FrameType):
-        return ["'", value.replace('\n', '\\n'), "'"].join('')
-    else:
-        try:
-          return str(value).replace('\n', '\\n')
-        except:
-          return '<ERROR: CANNOT PRINT>'
 
 def debug_log_decorator(func):
     """
@@ -34,33 +23,6 @@ def debug_log_decorator(func):
             value = func(*args, **kwargs)
             return value
         except Exception as ex:
-            frameTemplate = LOG_FRAME_TPL
-            valueToString = log_to_str
-            logFile = open("exception.log", 'wt')
-            try:
-                # log exception information first in case something fails below
-                logFile.write('Exception thrown, %s: %s\n' % (type(ex), str(ex)))
-                frames = inspect.getinnerframes(sys.exc_info()[2])
-                for frameInfo in reversed(frames):
-                    frameLocals = frameInfo[0].f_locals
-                    if '__lgw_marker_local__' in frameLocals:
-                        continue
-                    # log the frame information
-                    logFile.write(frameTemplate %
-                                   (frameInfo[1], frameInfo[2], frameInfo[3], frameInfo[4][0].lstrip()))
-
-                    # log every local variable of the frame
-                    for key, value in frameLocals.items():
-                        logFile.write('    %s = %s\n' % (key, valueToString(value)))
-
-                logFile.write('\n')
-            finally:
-                logFile.close()
-            logs = open('exception.log', 'rt').read()
-            data = re.sub(re.findall('raise (.*?)Error', logs)[0], 'IxNet', logs)
-            updateLog = open("exception.log", "wt")
-            updateLog.write(data)
-            updateLog.close()
             raise IxNetError(ex) from ex
     return wrapper_decorator
 
@@ -103,8 +65,7 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            # else:
-            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
+
         elif sessionName:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
@@ -113,8 +74,7 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            # else:
-            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
+
         else:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
@@ -123,8 +83,6 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            # else:
-            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server {0}".format(self.apiServerIp))
 
         return True
 
@@ -147,7 +105,7 @@ class Ixia():
                 else:
                     time.sleep(1)
                 if counter == 100:
-                    raise ixNetwork_Error.IxiaConnectionError('Connect Chassis: Connecting to chassis {0} failed'.format(chassisIp))
+                    raise IxNetError('Connect Chassis: Connecting to chassis {0} failed'.format(chassisIp))
         return True
 
     def load_config(self, config_file=None, port_tuple=None, chassis_ip=None):
@@ -207,7 +165,7 @@ class Ixia():
                 else:
                     time.sleep(1)
                 if counter == 60:
-                    raise ixNetwork_Error.IxiaConnectionError('Connect Ports: Connecting to ports {0} failed'.format(port_tuple))
+                    raise IxNetError('Connect Ports: Connecting to ports {0} failed'.format(port_tuple))
 
     def get_list_topology_name(self):
         """
@@ -257,7 +215,7 @@ class Ixia():
             for counter in range(0, timeout, 2):
                 if deviceGroupObj.Status == 'notStarted':
                     msg = '\nDevice Group "%s" is not started' % deviceGroupObj.Name
-                    raise ixNetwork_Error.IxiaOperationException(msg)
+                    raise IxNetError(msg)
                 if counter < timeout and deviceGroupObj.Status == 'starting':
                     time.sleep(2)
                     continue
@@ -265,7 +223,7 @@ class Ixia():
                     break
                 if counter == timeout and deviceGroupObj.Status not in ['started', 'mixed']:
                     msg = '\nDevice Group failed to come up: {0}.'.format(deviceGroupObj.href)
-                    raise ixNetwork_Error.IxiaOperationException(msg)
+                    raise IxNetError(msg)
         return True
 
     def stop_all_protocols(self):
@@ -319,7 +277,7 @@ class Ixia():
                 trafficItem = self.ixnetwork.Traffic.TrafficItem.find()
                 trafficItem.Generate()
         except:
-            raise ixNetwork_Error.IxiaConfigException("Failed to Re-Generate Traffic")
+            raise IxNetError("Failed to Re-Generate Traffic")
 
         return True
 
@@ -336,7 +294,7 @@ class Ixia():
             apperrors = globals.AppErrors.find()
             for error in apperrors.Error.find():
                 if "One or more destination MACs or VPNs are invalid" in error.Description:
-                    raise ixNetwork_Error.IxiaOperationException("Failed to apply traffic as packets are not generated properly")
+                    raise IxNetError("Failed to apply traffic as packets are not generated properly")
             self.ixnetwork.Traffic.TrafficItem.find(Name='^' + traffic_item_name + '$').StartStatelessTraffic()
         timeout = 30
         for counter in range(1, timeout+1):
@@ -345,7 +303,7 @@ class Ixia():
             else:
                 time.sleep(1)
             if counter == 30:
-                raise ixNetwork_Error.IxiaOperationException('Failed to start Traffic Item : {0}'.format(traffic_item_name))
+                raise IxNetError('Failed to start Traffic Item : {0}'.format(traffic_item_name))
 
     def stop_traffic_by_name(self, traffic_item_name):
         """
@@ -373,7 +331,7 @@ class Ixia():
                 else:
                     time.sleep(1)
                 if counter == 30:
-                    raise ixNetwork_Error.IxiaOperationException('Failed to start Traffic Streams')
+                    raise IxNetError('Failed to start Traffic Streams')
         else:
             return 'Traffic Streams already started'
 
@@ -669,18 +627,18 @@ class Ixia():
                         trafficName = trafficName.replace('+', '\+').replace('*', '\*')
                         self.ixnetwork.Traffic.TrafficItem.find(Name='^'+trafficName+'$').Enabled = True
                 except:
-                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to Enable")
+                    raise IxNetError("Not able to find the TrafficItem to Enable")
             if isinstance(traffic_item_list, str):
                 try:
                     self.ixnetwork.Traffic.TrafficItem.find(Name='^'+traffic_item_list+'$').Enabled = True
                 except:
-                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to Enable")
+                    raise IxNetError("Not able to find the TrafficItem to Enable")
         else:
             try:
                 for trafficItem in self.ixnetwork.Traffic.TrafficItem.find():
                     trafficItem.Enabled = True
             except:
-                raise ixNetwork_Error.IxiaConfigException("Failed to enable TrafficItem")
+                raise IxNetError("Failed to enable TrafficItem")
         logging.info("Traffic Item/Items enabled Successfully")
         return True
 
@@ -702,18 +660,18 @@ class Ixia():
                         trafficName = trafficName.replace('+', '\+').replace('*', '\*')
                         self.ixnetwork.Traffic.TrafficItem.find(Name='^'+trafficName+'$').Enabled = False
                 except:
-                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to disable")
+                    raise IxNetError("Not able to find the TrafficItem to disable")
             if isinstance(traffic_item_list, str):
                 try:
                     self.ixnetwork.Traffic.TrafficItem.find(Name='^'+traffic_item_list+'$').Enabled = False
                 except:
-                    raise ixNetwork_Error.IxiaConfigException("Not able to find the TrafficItem to disable")
+                    raise IxNetError("Not able to find the TrafficItem to disable")
         else:
             try:
                 for trafficItem in self.ixnetwork.Traffic.TrafficItem.find():
                     trafficItem.Enabled = False
             except:
-                raise ixNetwork_Error.IxiaConfigException("Failed to disable TrafficItem")
+                raise IxNetError("Failed to disable TrafficItem")
         logging.info("Traffic Item/Items Disabled Successfully")
         return True
 
@@ -752,7 +710,7 @@ class Ixia():
                         try:
                             regexString = self.ixnetwork.Vport.find(Name=port).AssignedTo
                         except:
-                            raise ixNetwork_Error.IxiaConfigException("Port not configured or Failed to release")
+                            raise IxNetError("Port not configured or Failed to release")
                 vport = self.ixnetwork.Vport.find(AssignedTo=regexString)
                 if vport:
                     vportNames.append(vport.Name)
@@ -761,7 +719,7 @@ class Ixia():
             for vport in self.ixnetwork.Vport.find():
                 if vport.ConnectionStatus != 'Port Released':
                     msg = 'Release Port "%s" not Successful' % (vport.Name)
-                    raise ixNetwork_Error.IxiaOperationException(msg)
+                    raise IxNetError(msg)
         return True
 
     def disconnect_session(self, port_list=None, tgn_server_type="windows"):
@@ -808,7 +766,7 @@ class Ixia():
             if portNames:
                 return portNames
             else:
-                raise ixNetwork_Error.IxiaConfigException("Ports not available, please send port details")
+                raise IxNetError("Ports not available, please send port details")
         else:
             return None
         
@@ -993,7 +951,7 @@ class Ixia():
             version = protocolDict[protocol.lower()]['version']
             routeRange = protocolDict[protocol.lower()]['routeRange']
         else:
-            raise ixNetwork_Error.IxiaConfigException("Please send a valid protocol name")
+            raise IxNetError("Please send a valid protocol name")
         return [propertyObj,version,routeRange]
 
     def get_routerrange_details(self, port, protocol):
@@ -1031,7 +989,7 @@ class Ixia():
         if routeRanges:
             return routeRanges
         else:
-            raise ixNetwork_Error.IxiaConfigException("Route ranges not available on this {0} port for the {1} protocol".format(port,protocol))
+            raise IxNetError("Route ranges not available on this {0} port for the {1} protocol".format(port,protocol))
 
     def get_routerange_state(self, vport_objref, proto_name="ospf"):
         """
@@ -1063,6 +1021,6 @@ class Ixia():
         if routeRangesState:
             return routeRangesState
         else:
-            raise ixNetwork_Error.IxiaConfigException(
+            raise IxNetError(
                 "Route ranges not available on this {0} port for the {1} protocol".format(vport_objref, proto_name))
 
