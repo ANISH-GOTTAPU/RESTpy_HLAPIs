@@ -2,9 +2,25 @@ from ixnetwork_restpy import SessionAssistant
 from ixnetwork_restpy.files import Files
 from ixnetwork_restpy.assistants.statistics.statviewassistant import StatViewAssistant
 import logging,time,re,datetime,csv,functools
-import netaddr, ixNetwork_Error, inspect
+import netaddr, ixNetwork_Error, inspect, os, types, sys
 from collections import namedtuple
 # logging.basicConfig(level=logging.INFO)
+class IxNetError(Exception):
+    """
+    Default IxNet error
+    """
+
+# default frame template (see log_exceptions below)
+LOG_FRAME_TPL = '  File "%s", line %i, in %s\n    %s\n'
+
+def log_to_str(value):
+    if isinstance(value, types.FrameType):
+        return ["'", value.replace('\n', '\\n'), "'"].join('')
+    else:
+        try:
+          return str(value).replace('\n', '\\n')
+        except:
+          return '<ERROR: CANNOT PRINT>'
 
 def debug_log_decorator(func):
     """
@@ -17,12 +33,35 @@ def debug_log_decorator(func):
         try:
             value = func(*args, **kwargs)
             return value
-        except:
+        except Exception as ex:
+            frameTemplate = LOG_FRAME_TPL
+            valueToString = log_to_str
+            logFile = open("exception.log", 'wt')
             try:
-                args[0]._download_debug_files()
-            except:
-                pass
-            raise
+                # log exception information first in case something fails below
+                logFile.write('Exception thrown, %s: %s\n' % (type(ex), str(ex)))
+                frames = inspect.getinnerframes(sys.exc_info()[2])
+                for frameInfo in reversed(frames):
+                    frameLocals = frameInfo[0].f_locals
+                    if '__lgw_marker_local__' in frameLocals:
+                        continue
+                    # log the frame information
+                    logFile.write(frameTemplate %
+                                   (frameInfo[1], frameInfo[2], frameInfo[3], frameInfo[4][0].lstrip()))
+
+                    # log every local variable of the frame
+                    for key, value in frameLocals.items():
+                        logFile.write('    %s = %s\n' % (key, valueToString(value)))
+
+                logFile.write('\n')
+            finally:
+                logFile.close()
+            logs = open('exception.log', 'rt').read()
+            data = re.sub(re.findall('raise (.*?)Error', logs)[0], 'IxNet', logs)
+            updateLog = open("exception.log", "wt")
+            updateLog.write(data)
+            updateLog.close()
+            raise IxNetError(ex) from ex
     return wrapper_decorator
 
 def decorator_for_class(cls):
@@ -64,8 +103,8 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            else:
-                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
+            # else:
+            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
         elif sessionName:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
@@ -74,8 +113,8 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            else:
-                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
+            # else:
+            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server %s"%self.apiServerIp)
         else:
             session_assistant = SessionAssistant(IpAddress=self.apiServerIp,
                                                  UserName='admin', Password='admin',
@@ -84,8 +123,8 @@ class Ixia():
             if session_assistant:
                 self.session = session_assistant.Session
                 self.ixnetwork = session_assistant.Ixnetwork
-            else:
-                raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server {0}".format(self.apiServerIp))
+            # else:
+            #     raise ixNetwork_Error.IxiaConnectionError("Failed to connect API Server {0}".format(self.apiServerIp))
 
         return True
 
@@ -923,38 +962,36 @@ class Ixia():
         IsisRouteRange = namedtuple("IsisRouteRange", [])
         LdpRouteRange = namedtuple("LdpRouteRange", [])
         Ldpv6RouteRange = namedtuple("Ldpv6RouteRange", [])
-        if protocol.lower() == 'bgp':
-            propertyObj = 'BgpIPRoute'
-            version = 'v4'
-            routeRange = BgpRouteRange
-        elif protocol.lower() == 'bgpv6':
-            propertyObj = 'BgpV6IPRoute'
-            version = 'v6'
-            routeRange = Bgpv6RouteRange
-        elif protocol.lower() == 'ospf':
-            version = 'v4'
-            propertyObj = 'OspfRoute'
-            routeRange = OspfRouteRange
-        elif protocol.lower() == 'ospfv3':
-            propertyObj = 'Ospfv3Route'
-            version = 'v6'
-            routeRange = Ospfv3RouteRange
-        elif protocol.lower() == 'ldp':
-            propertyObj = 'LdpFEC'
-            version = 'v4'
-            routeRange = LdpRouteRange
-        elif protocol.lower() == 'ldpv6':
-            routeRange = Ldpv6RouteRange
-            version = 'v6'
-            propertyObj = 'LdpIpv6FEC'
-        elif protocol.lower() == 'isis':
-            propertyObj = 'IsisL3Route'
-            version = 'v4'
-            routeRange = IsisRouteRange
-        elif protocol.lower() == 'isisv6':
-            propertyObj = 'IsisL3Route'
-            version = 'v6'
-            routeRange = IsisRouteRange
+        protocolDict = {
+            'bgp' : {
+                'propertyObj': 'BgpIPRoute', 'version': 'v4', 'routeRange': BgpRouteRange
+            },
+            'bgpv6': {
+                'propertyObj': 'BgpV6IPRoute', 'version': 'v6', 'routeRange': Bgpv6RouteRange
+            },
+            'ospf': {
+                'propertyObj': 'BgpV6IPRoute', 'version': 'v4', 'routeRange': OspfRouteRange
+            },
+            'ospfv3': {
+                'propertyObj': 'Ospfv3Route', 'version': 'v6', 'routeRange': Ospfv3RouteRange
+            },
+            'ldp': {
+                'propertyObj': 'LdpFEC', 'version': 'v4', 'routeRange': LdpRouteRange
+            },
+            'ldpv6': {
+                'propertyObj': 'LdpIpv6FEC', 'version': 'v6', 'routeRange': Ldpv6RouteRange
+            },
+            'isis': {
+                'propertyObj': 'IsisL3Route', 'version': 'v4', 'routeRange': IsisRouteRange
+            },
+            'isisv6': {
+                'propertyObj': 'IsisL3Route', 'version': 'v6', 'routeRange': IsisRouteRange
+            }
+        }
+        if protocol.lower() in protocolDict:
+            propertyObj = protocolDict[protocol.lower()]['propertyObj']
+            version = protocolDict[protocol.lower()]['version']
+            routeRange = protocolDict[protocol.lower()]['routeRange']
         else:
             raise ixNetwork_Error.IxiaConfigException("Please send a valid protocol name")
         return [propertyObj,version,routeRange]
